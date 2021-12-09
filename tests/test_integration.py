@@ -29,7 +29,7 @@ SEED = 0
 EPOCHS = 10
 NUM_FOLDS = 3
 NUM_ITER = 2
-DELTA = 0.05
+DELTA = 0.000000001
 
 
 class ChempropTests(TestCase):
@@ -223,6 +223,7 @@ class ChempropTests(TestCase):
                                           expected_score: float,
                                           train_flags: List[str] = None):
         with TemporaryDirectory() as save_dir:
+            save_dir = f'../test/train_single_regression/{name}'
             # Train
             metric = 'rmse'
             self.train(
@@ -266,6 +267,7 @@ class ChempropTests(TestCase):
                                              expected_score: float,
                                              train_flags: List[str] = None):
         with TemporaryDirectory() as save_dir:
+            save_dir = f'../test/train_multi_class/{name}'
             # Train
             metric = 'auc'
             self.train(
@@ -322,6 +324,7 @@ class ChempropTests(TestCase):
                                             train_flags: List[str] = None,
                                             predict_flags: List[str] = None):
         with TemporaryDirectory() as save_dir:
+            save_dir = f'../test/pred_single_regression/{name}'
             # Train
             dataset_type = 'regression'
             self.train(
@@ -381,6 +384,7 @@ class ChempropTests(TestCase):
                                                train_flags: List[str] = None,
                                                predict_flags: List[str] = None):
         with TemporaryDirectory() as save_dir:
+            save_dir = f'../test/pred_multi_class/{name}'
             # Train
             dataset_type = 'classification'
             self.train(
@@ -414,6 +418,7 @@ class ChempropTests(TestCase):
 
     def test_chemprop_hyperopt(self):
         with TemporaryDirectory() as save_dir:
+            save_dir = f'../test/hyperopt'
             # Train
             config_save_path = os.path.join(save_dir, 'config.json')
             self.hyperopt(
@@ -448,6 +453,7 @@ class ChempropTests(TestCase):
                                               train_flags: List[str] = None,
                                               interpret_flags: List[str] = None):
         with TemporaryDirectory() as save_dir:
+            save_dir = f'../test/interpret_single_regression/{name}'
             # Train
             dataset_type = 'regression'
             self.train(
@@ -590,6 +596,7 @@ class ChempropTests(TestCase):
                                           expected_score: float,
                                           train_flags: List[str] = None):
         with TemporaryDirectory() as save_dir:
+            save_dir = f'../test/train_spectra/{name}'
             # Train
             metric = 'sid'
             self.train(
@@ -656,6 +663,7 @@ class ChempropTests(TestCase):
                                             train_flags: List[str] = None,
                                             predict_flags: List[str] = None):
         with TemporaryDirectory() as save_dir:
+            save_dir = f'../test/pred_spectra/{name}'
             # Train
             dataset_type = 'spectra'
             self.train(
@@ -726,6 +734,7 @@ class ChempropTests(TestCase):
                                           expected_score: float,
                                           train_flags: List[str] = None):
         with TemporaryDirectory() as save_dir:
+            save_dir = f'../test/train_single_reaction/{name}'
             # Train
             metric = 'rmse'
             self.train(
