@@ -446,7 +446,7 @@ def get_loss_func(args: TrainArgs) -> nn.Module:
         return nn.MSELoss(reduction='none')
 
     if args.dataset_type == 'regression':
-        if args.confidence == 'nn':
+        if args.confidence == 'mve':
             return negative_log_likelihood
 
         if args.confidence == 'evidence':

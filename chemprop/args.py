@@ -418,6 +418,51 @@ class TrainArgs(CommonArgs):
     (only relevant for number_of_molecules > 1, where checkpoint model has number_of_molecules = 1)
     """
 
+    # Confidence Arguments
+    confidence: Literal['mve', 'evidence', 
+                        # 'gaussian', 'random_forest', 
+                        # 'ensemble','tanimoto', 'conformal', 'probability',
+                        # 'conformal',  'boost', 'latent_space',
+                        # 'bootstrap', 'snapshot', 'dropout',
+                        # 'fp_random_forest', 'fp_gaussian', 
+                        # 'sigmoid',
+                        ] = None
+    """
+    Measure confidence values for the prediction.
+    """
+    regularizer_coeff: float = 1.0
+    """
+    Coefficient to scale the loss function regularizer.
+    """
+    # no_dropout_inference: bool = False
+    # """
+    # If true, don't use dropout for mean inference.
+    # """
+    # use_entropy: bool = False
+    # """
+    # If true, also output the entropy for each prediction with the model.
+    # """
+    # no_smiles_export: bool = False
+    # """
+    # If set, avoid storing the smiles with exported data prediction with the model.
+    # """
+    # calibrate_confidence: bool = False
+    # """
+    # Calibrate confidence by test data.
+    # """
+    # save_confidence: str = None,
+    # """
+    # Measure confidence values for the prediction.
+    # """
+    # last_hidden_size: int = 300,
+    # """
+    # Size of last hidden layer.
+    # """
+    # confidence_evaluation_methods: List[str] = []
+    # """
+    # List of confidence evaluation methods.
+    # """
+
     def __init__(self, *args, **kwargs) -> None:
         super(TrainArgs, self).__init__(*args, **kwargs)
         self._task_names = None
