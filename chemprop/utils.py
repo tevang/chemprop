@@ -1,6 +1,7 @@
 from argparse import Namespace
 import csv
 from datetime import timedelta
+import functools
 from functools import wraps
 import logging
 import math
@@ -15,6 +16,7 @@ from sklearn.metrics import auc, mean_absolute_error, mean_squared_error, precis
     roc_auc_score, accuracy_score, log_loss
 import torch
 import torch.nn as nn
+import numpy as np
 from torch.optim import Adam, Optimizer
 from torch.optim.lr_scheduler import _LRScheduler
 from tqdm import tqdm
@@ -321,6 +323,104 @@ def load_task_names(path: str) -> List[str]:
     """
     return load_args(path).task_names
 
+def negative_log_likelihood(pred_targets, pred_var, targets):
+    clamped_var = torch.clamp(pred_var, min=0.00001)
+    return torch.log(2*np.pi*clamped_var) / 2 + (pred_targets - targets)**2 / (2 * clamped_var)
+
+# evidential classification
+def dirichlet_loss(y, alphas, lam=1):
+    """
+    Use Evidential Learning Dirichlet loss from Sensoy et al
+    :y: labels to predict
+    :alphas: predicted parameters for Dirichlet
+    :lambda: coefficient to weight KL term
+
+    :return: Loss
+    """
+    def KL(alpha):
+        """
+        Compute KL for Dirichlet defined by alpha to uniform dirichlet
+        :alpha: parameters for Dirichlet
+
+        :return: KL
+        """
+        beta = torch.ones_like(alpha)
+        S_alpha = torch.sum(alpha, dim=-1, keepdim=True)
+        S_beta = torch.sum(beta, dim=-1, keepdim=True)
+
+        ln_alpha = torch.lgamma(S_alpha)-torch.sum(torch.lgamma(alpha), dim=-1, keepdim=True)
+        ln_beta = torch.sum(torch.lgamma(beta), dim=-1, keepdim=True) - torch.lgamma(S_beta)
+
+        # digamma terms
+        dg_alpha = torch.digamma(alpha)
+        dg_S_alpha = torch.digamma(S_alpha)
+
+        # KL
+        kl = ln_alpha + ln_beta + torch.sum((alpha - beta)*(dg_alpha - dg_S_alpha), dim=-1, keepdim=True)
+        return kl
+
+
+    # Hard code to 2 classes per task, since this assumption is already made
+    # for the existing chemprop classification tasks
+    num_classes = 2
+    num_tasks = y.shape[1]
+
+    y_one_hot = torch.eye(num_classes)[y.long()]
+    if y.is_cuda:
+        y_one_hot = y_one_hot.cuda()
+
+    alphas = torch.reshape(alphas, (alphas.shape[0], num_tasks, num_classes))
+
+    # SOS term
+    S = torch.sum(alphas, dim=-1, keepdim=True)
+    p = alphas / S
+    A = torch.sum(torch.pow((y_one_hot - p), 2), dim=-1, keepdim=True)
+    B = torch.sum((p*(1 - p)) / (S+1), dim=-1, keepdim=True)
+    SOS = A + B
+
+    # KL
+    alpha_hat = y_one_hot + (1-y_one_hot)*alphas
+    KL = lam * KL(alpha_hat)
+
+    #loss = torch.mean(SOS + KL)
+    loss = SOS + KL
+    loss = torch.mean(loss, dim=-1)
+    return loss
+
+# updated evidential regression loss (evidential_loss_new from Amini repo)
+def evidential_loss(mu, v, alpha, beta, targets, lam=1, epsilon=1e-4):
+    """
+    Use Deep Evidential Regression negative log likelihood loss + evidential
+        regularizer
+
+    :mu: pred mean parameter for NIG
+    :v: pred lam parameter for NIG
+    :alpha: predicted parameter for NIG
+    :beta: Predicted parmaeter for NIG
+    :targets: Outputs to predict
+
+    :return: Loss
+    """
+    # Calculate NLL loss
+    twoBlambda = 2*beta*(1+v)
+    nll = 0.5*torch.log(np.pi/v) \
+        - alpha*torch.log(twoBlambda) \
+        + (alpha+0.5) * torch.log(v*(targets-mu)**2 + twoBlambda) \
+        + torch.lgamma(alpha) \
+        - torch.lgamma(alpha+0.5)
+
+    L_NLL = nll #torch.mean(nll, dim=-1)
+
+    # Calculate regularizer based on absolute error of prediction
+    error = torch.abs((targets - mu))
+    reg = error * (2 * v + alpha)
+    L_REG = reg #torch.mean(reg, dim=-1)
+
+    # Loss = L_NLL + L_REG
+    # TODO If we want to optimize the dual- of the objective use the line below:
+    loss = L_NLL + lam * (L_REG - epsilon)
+
+    return loss
 
 def get_loss_func(args: TrainArgs) -> nn.Module:
     """
@@ -337,10 +437,27 @@ def get_loss_func(args: TrainArgs) -> nn.Module:
                                 'supported with dataset type {args.dataset_type}.')
 
     if args.dataset_type == 'classification':
-        return nn.BCEWithLogitsLoss(reduction='none')
+        if args.confidence == 'evidence':
+            return functools.partial(dirichlet_loss, lam=args.regularizer_coeff)
+        else:
+            return nn.BCEWithLogitsLoss(reduction='none')
 
     if args.dataset_type == 'regression':
         return nn.MSELoss(reduction='none')
+
+    if args.dataset_type == 'regression':
+        if args.confidence == 'nn':
+            return negative_log_likelihood
+
+        if args.confidence == 'evidence':
+            return functools.partial(evidential_loss, lam=args.regularizer_coeff)
+
+        if args.metric == "rmse":
+            return nn.MSELoss(reduction='none')
+        elif args.metric == "mae":
+            return nn.L1Loss(reduction='none')
+        else:
+            raise ValueError(f"metric {args.metric} must be compatible with regression if --data_type=regression")
 
     if args.dataset_type == 'multiclass':
         return nn.CrossEntropyLoss(reduction='none')
@@ -487,25 +604,32 @@ def build_optimizer(model: nn.Module, args: TrainArgs) -> Optimizer:
     return Adam(params)
 
 
-def build_lr_scheduler(optimizer: Optimizer, args: TrainArgs, total_epochs: List[int] = None) -> _LRScheduler:
+def build_lr_scheduler(optimizer: Optimizer, args: TrainArgs, total_epochs: List[int] = None, scheduler_name : str = "noam") -> _LRScheduler:
     """
     Builds a PyTorch learning rate scheduler.
 
     :param optimizer: The Optimizer whose learning rate will be scheduled.
     :param args: A :class:`~chemprop.args.TrainArgs` object containing learning rate arguments.
     :param total_epochs: The total number of epochs for which the model will be run.
+    :param scheduler_name: Name of scheduler
     :return: An initialized learning rate scheduler.
     """
     # Learning rate scheduler
-    return NoamLR(
-        optimizer=optimizer,
-        warmup_epochs=[args.warmup_epochs],
-        total_epochs=total_epochs or [args.epochs] * args.num_lrs,
-        steps_per_epoch=args.train_data_size // args.batch_size,
-        init_lr=[args.init_lr],
-        max_lr=[args.max_lr],
-        final_lr=[args.final_lr]
-    )
+    if scheduler_name == "plateau":
+        return PlateauScheduler(optimizer=optimizer, patience=args.patience,
+                                factor=args.factor, final_lr=args.final_lr)
+    elif scheduler_name == "noam":
+        return NoamLR(
+            optimizer=optimizer,
+            warmup_epochs=[args.warmup_epochs],
+            total_epochs=total_epochs or [args.epochs] * args.num_lrs,
+            steps_per_epoch=args.train_data_size // args.batch_size,
+            init_lr=[args.init_lr],
+            max_lr=[args.max_lr],
+            final_lr=[args.final_lr]
+        )
+    else:
+        raise NotImplementedError(f"Scheduler name {scheduler_name} is not implemented")
 
 
 def create_logger(name: str, save_dir: str = None, quiet: bool = False) -> logging.Logger:
